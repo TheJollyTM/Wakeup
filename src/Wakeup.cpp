@@ -20,12 +20,7 @@ HINSTANCE g_hInst = nullptr;
 NOTIFYICONDATA g_nid = {};
 UINT_PTR g_timerId = 0;
 HWND g_hwnd = nullptr;
-
-const DWORD g_checkIntervalMs = 1000;    // Check every 1 second
-const DWORD g_idleRequiredMs = 60000;    // 60s idle before moving
-
-POINT g_lastPos = { 0, 0 };
-DWORD g_idleMs = 0;
+const DWORD g_intervalSeconds = 60; // hardcoded
 
 HICON CreateIconFromBase64()
 {
@@ -77,32 +72,14 @@ void RemoveTrayIcon()
     g_nid.hIcon = nullptr;
 }
 
-// Only moves mouse if idle for 60s
+// Move visibly for debug!
 void StealthMouseMove()
 {
     POINT pt;
     GetCursorPos(&pt);
-    SetCursorPos(pt.x + 1, pt.y);  // move 1 pixel right
-    SetCursorPos(pt.x, pt.y);      // move back
-}
-
-void CheckMouseIdle()
-{
-    POINT pt;
-    GetCursorPos(&pt);
-
-    if (pt.x != g_lastPos.x || pt.y != g_lastPos.y) {
-        g_idleMs = 0; // mouse moved!
-        g_lastPos = pt;
-    }
-    else {
-        g_idleMs += g_checkIntervalMs;
-        if (g_idleMs >= g_idleRequiredMs) {
-            StealthMouseMove();
-            g_idleMs = 0; // Reset after jiggling
-            GetCursorPos(&g_lastPos); // Update position in case system moves mouse back
-        }
-    }
+    SetCursorPos(pt.x + 30, pt.y);  // Move 30px right
+    Sleep(300);                     // Wait a bit
+    SetCursorPos(pt.x, pt.y);       // Move back
 }
 
 LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
@@ -130,7 +107,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         break;
     case WM_TIMER:
         if (wParam == 1)
-            CheckMouseIdle();
+            StealthMouseMove();
         break;
     case WM_DESTROY:
         RemoveTrayIcon();
@@ -160,12 +137,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int)
         return 0;
 
     AddTrayIcon(g_hwnd);
-
-    // Initialize idle detection
-    GetCursorPos(&g_lastPos);
-    g_idleMs = 0;
-
-    g_timerId = SetTimer(g_hwnd, 1, g_checkIntervalMs, nullptr); // check every 1s
+    g_timerId = SetTimer(g_hwnd, 1, g_intervalSeconds * 1000, nullptr);
 
     MSG msg;
     while (GetMessage(&msg, nullptr, 0, 0))
