@@ -21,10 +21,12 @@ NOTIFYICONDATA g_nid = {};
 UINT_PTR g_timerId = 0;
 HWND g_hwnd = nullptr;
 
-// Set your hardcoded interval (seconds)
-const DWORD g_intervalSeconds = 60;
+const DWORD g_checkIntervalMs = 1000;    // Check every 1 second
+const DWORD g_idleRequiredMs = 60000;    // 60s idle before moving
 
-// Icon loader from PNG/base64
+POINT g_lastPos = { 0, 0 };
+DWORD g_idleMs = 0;
+
 HICON CreateIconFromBase64()
 {
     ULONG decodedSize = 0;
@@ -35,30 +37,20 @@ HICON CreateIconFromBase64()
         delete[] decodedBytes;
         return LoadIcon(nullptr, IDI_APPLICATION);
     }
-    ULONG_PTR gdiplusToken;
-    GdiplusStartupInput gdiplusStartupInput;
-    if (GdiplusStartup(&gdiplusToken, &gdiplusStartupInput, NULL) != Ok) {
-        delete[] decodedBytes;
-        return LoadIcon(nullptr, IDI_APPLICATION);
-    }
     IStream* pStream = SHCreateMemStream(decodedBytes, decodedSize);
     delete[] decodedBytes;
-    if (!pStream) {
-        GdiplusShutdown(gdiplusToken);
+    if (!pStream)
         return LoadIcon(nullptr, IDI_APPLICATION);
-    }
     Bitmap* bitmap = Bitmap::FromStream(pStream);
     pStream->Release();
     if (!bitmap || bitmap->GetLastStatus() != Ok) {
         delete bitmap;
-        GdiplusShutdown(gdiplusToken);
         return LoadIcon(nullptr, IDI_APPLICATION);
     }
     HICON hIcon = NULL;
     if (bitmap->GetHICON(&hIcon) != Ok)
         hIcon = NULL;
     delete bitmap;
-    GdiplusShutdown(gdiplusToken);
     if (!hIcon)
         return LoadIcon(nullptr, IDI_APPLICATION);
     return hIcon;
@@ -67,13 +59,13 @@ HICON CreateIconFromBase64()
 void AddTrayIcon(HWND hwnd)
 {
     ZeroMemory(&g_nid, sizeof(g_nid));
-    g_nid.cbSize = sizeof(NOTIFYICONDATA);
+    g_nid.cbSize = sizeof(g_nid);
     g_nid.hWnd = hwnd;
     g_nid.uID = 1;
     g_nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP | NIF_SHOWTIP;
     g_nid.uCallbackMessage = WM_TRAYICON;
     g_nid.hIcon = CreateIconFromBase64();
-    StringCchCopy(g_nid.szTip, ARRAYSIZE(g_nid.szTip), L"Stealth Mouse Mover");
+    StringCchCopy(g_nid.szTip, ARRAYSIZE(g_nid.szTip), L"SMM");
     Shell_NotifyIcon(NIM_ADD, &g_nid);
 }
 
@@ -85,13 +77,32 @@ void RemoveTrayIcon()
     g_nid.hIcon = nullptr;
 }
 
-// Mouse mover logic (stealth)
+// Only moves mouse if idle for 60s
 void StealthMouseMove()
 {
     POINT pt;
     GetCursorPos(&pt);
-    SetCursorPos(pt.x + 1, pt.y);
-    SetCursorPos(pt.x, pt.y);
+    SetCursorPos(pt.x + 1, pt.y);  // move 1 pixel right
+    SetCursorPos(pt.x, pt.y);      // move back
+}
+
+void CheckMouseIdle()
+{
+    POINT pt;
+    GetCursorPos(&pt);
+
+    if (pt.x != g_lastPos.x || pt.y != g_lastPos.y) {
+        g_idleMs = 0; // mouse moved!
+        g_lastPos = pt;
+    }
+    else {
+        g_idleMs += g_checkIntervalMs;
+        if (g_idleMs >= g_idleRequiredMs) {
+            StealthMouseMove();
+            g_idleMs = 0; // Reset after jiggling
+            GetCursorPos(&g_lastPos); // Update position in case system moves mouse back
+        }
+    }
 }
 
 LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
@@ -112,7 +123,6 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                 DestroyMenu(hMenu);
             }
         }
-        // Do nothing on left click, stealth mode!
         break;
     case WM_COMMAND:
         if (LOWORD(wParam) == ID_TRAY_EXIT)
@@ -120,7 +130,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         break;
     case WM_TIMER:
         if (wParam == 1)
-            StealthMouseMove();
+            CheckMouseIdle();
         break;
     case WM_DESTROY:
         RemoveTrayIcon();
@@ -135,18 +145,27 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int)
 {
     g_hInst = hInstance;
+    ULONG_PTR gdiplusToken;
+    GdiplusStartupInput gdiplusStartupInput;
+    GdiplusStartup(&gdiplusToken, &gdiplusStartupInput, NULL);
+
     WNDCLASS wc = { 0 };
     wc.lpfnWndProc = WndProc;
     wc.hInstance = hInstance;
-    wc.lpszClassName = L"StealthMouseMoverClass";
+    wc.lpszClassName = L"SMMClass";
     RegisterClass(&wc);
 
-    g_hwnd = CreateWindow(wc.lpszClassName, L"Stealth Mouse Mover", 0, 0, 0, 0, 0, HWND_MESSAGE, nullptr, hInstance, nullptr);
+    g_hwnd = CreateWindow(wc.lpszClassName, L"SMM", 0, 0, 0, 0, 0, HWND_MESSAGE, nullptr, hInstance, nullptr);
     if (!g_hwnd)
         return 0;
 
     AddTrayIcon(g_hwnd);
-    g_timerId = SetTimer(g_hwnd, 1, g_intervalSeconds * 1000, nullptr);
+
+    // Initialize idle detection
+    GetCursorPos(&g_lastPos);
+    g_idleMs = 0;
+
+    g_timerId = SetTimer(g_hwnd, 1, g_checkIntervalMs, nullptr); // check every 1s
 
     MSG msg;
     while (GetMessage(&msg, nullptr, 0, 0))
@@ -154,6 +173,8 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int)
         TranslateMessage(&msg);
         DispatchMessage(&msg);
     }
+
     RemoveTrayIcon();
+    GdiplusShutdown(gdiplusToken);
     return 0;
 }
